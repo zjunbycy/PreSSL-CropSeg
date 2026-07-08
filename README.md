@@ -6,7 +6,7 @@
 
 ```text
 PASTIS Sentinel-2 time series
-  -> shared per-frame encoder
+  -> chunked frozen encoder
   -> temporal-aware DPT decoder
   -> semantic mask logits
 ```
@@ -87,6 +87,20 @@ PreSSL-CropSeg/
 
 当前短学期统一协议为：只使用 `fold3` 训练，`fold4` 验证，`fold5` 测试，便于和另一组方法在同一数据划分上对齐比较。标准 PASTIS 参考协议为 `fold1,2,3` 训练，`fold4` 验证，`fold5` 测试；时间允许时可再补完整协议。
 
+Galileo 默认使用 4 个连续时相作为一个输入窗口：
+
+```yaml
+model:
+  encoder:
+    temporal_chunk_size: 4
+```
+
+因此原始 `T` 个时相会被切成 `K=ceil(T/4)` 个 chunk。Galileo 在每个 chunk 内做局部时序特征提取，下游 temporal fusion / decoder 再融合这些 chunk。若要退回单帧特征提取，可把该值设为 `1`，或训练时临时覆盖：
+
+```bash
+python scripts/train.py --config configs/exp_late.yaml --temporal-chunk-size 1
+```
+
 | 配置文件 | 编码器 | 融合策略 | 编码器状态 | 用途 |
 |---|---|---|---|---|
 | `configs/exp_imagenet_baseline.yaml` | ImageNet ResNet50 | Late | 冻结 | ImageNet 冻结特征基线 |
@@ -144,6 +158,7 @@ python scripts/train.py --config configs/exp_decision.yaml --batch-size 1
 python scripts/train.py --config configs/exp_late.yaml --epochs 100
 python scripts/train.py --config configs/exp_late.yaml --lr 0.0005
 python scripts/train.py --config configs/exp_late.yaml --data-root "D:/PASTIS"
+python scripts/train.py --config configs/exp_late.yaml --temporal-chunk-size 4
 ```
 
 日志和 checkpoint 默认输出到：
@@ -189,10 +204,10 @@ python scripts/eval.py ^
 ```text
 Input: (B, T, 10, 128, 128)
   |
-  +-- Encoder, shared across time
-  |     +-- Galileo via Hugging Face transformers
+  +-- Encoder, frozen
+  |     +-- Galileo via Hugging Face transformers, chunked by temporal_chunk_size
   |     +-- ImageNet baseline via segmentation_models_pytorch
-  |     -> [F1, F2, F3, F4], each keeps T
+  |     -> [F1, F2, F3, F4], each keeps temporal chunk dimension K
   |
   +-- Temporal fusion
   |     +-- Late fusion: temporal-aware DPT decoder
@@ -202,7 +217,7 @@ Input: (B, T, 10, 128, 128)
   +-- Segmentation logits: (B, 20, 128, 128)
 ```
 
-晚期融合是当前主线：编码器逐帧提取多尺度特征，DPT 解码阶段逐层进行时间维度聚合，最终输出统一空间分辨率的分割 logits。
+晚期融合是当前主线：Galileo 默认每 4 个连续时相提取一次 chunk-level 多尺度特征，DPT 解码阶段逐层聚合 chunk 维度，最终输出统一空间分辨率的分割 logits。
 
 ## 项目结构
 
@@ -227,6 +242,7 @@ logs/                    training outputs
 
 - 本地 PASTIS 标签为 `0..19`，不要把 `num_classes` 改回 19。
 - SSL encoder 提取特征时不要对输入影像做缩放；保持 PASTIS 原始 `128x128` 输入，不需要迁就 SSL 模型预训练时的图像大小。
+- Galileo 默认 `temporal_chunk_size=4`；设置为 `1` 可退回单帧输入，仅建议用于调试或消融。
 - Galileo 的真实权重依赖 `transformers`、`huggingface-hub` 和 `trust_remote_code=True`。
 - Galileo + AMP 可能出现数值不稳定；线性探测和默认 late 方案建议先用 `--no-amp` 验证。
 - 冻结 encoder 时，wrapper 会保持 encoder 为 eval 模式，只训练 temporal fusion、decoder/head。

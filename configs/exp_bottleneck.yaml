@@ -6,11 +6,12 @@ model:
     type: "galileo"
     model_name: "BiliSakura/GALILEO-transformers"
     subfolder: "galileo-base-patch8"
-    mode: "per_frame"
+    mode: "chunked"
     in_channels: 10
     img_size: 128
     freeze: true
     output_scales: 4
+    temporal_chunk_size: 4
   fusion_strategy: "bottleneck"
   decoder_channels: 256
 

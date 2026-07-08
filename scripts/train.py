@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--max-train-batches", type=int, default=None)
     parser.add_argument("--max-val-batches", type=int, default=None)
     parser.add_argument("--max-timesteps", type=int, default=None)
+    parser.add_argument("--temporal-chunk-size", type=int, default=None)
     parser.add_argument("--no-amp", action="store_true")
     return parser.parse_args()
 
@@ -106,6 +107,11 @@ def main():
         cfg["training"]["max_val_batches"] = args.max_val_batches
     if args.max_timesteps is not None:
         cfg["training"]["max_timesteps"] = args.max_timesteps
+    if args.temporal_chunk_size is not None:
+        if cfg["model"]["encoder"].get("type") == "galileo":
+            cfg["model"]["encoder"]["temporal_chunk_size"] = args.temporal_chunk_size
+        else:
+            print("--temporal-chunk-size ignored: encoder is not galileo")
     if args.no_amp:
         cfg["training"]["amp"] = False
 

@@ -20,11 +20,12 @@ model:
     type: "galileo"                       # galileo | imagenet
     model_name: "BiliSakura/GALILEO-transformers"
     subfolder: "galileo-base-patch8"
-    mode: "per_frame"                     # per_frame | joint
+    mode: "chunked"                       # chunked | per_frame | joint
     in_channels: 10
     img_size: 128
     freeze: true                         # freeze pretrained encoder; train fusion/decoder/head
     output_scales: 4
+    temporal_chunk_size: 4               # Galileo sees 4 dates per call; set 1 for single-frame
 
   # ── Fusion Strategy ──
   fusion_strategy: "late"                 # bottleneck | late | decision

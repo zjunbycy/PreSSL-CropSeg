@@ -14,8 +14,8 @@ For PASTIS (S2-only, 10 bands), we:
   - Set all other modalities to 0 with mask=1 (missing)
   - Set months from PASTIS dates + reference_date
 
-Architecture: GalileoEncoderModel → last_hidden_state (B, N_patches, 768)
-We reshape N_patches to spatial grid for multi-scale feature pyramid.
+Architecture: GalileoEncoderModel → last_hidden_state (B, N_tokens, 768)
+We pool tokens back to spatial feature maps for the downstream decoder.
 """
 
 import os
@@ -107,22 +107,25 @@ class GalileoEncoder(nn.Module):
     Args:
         model_name: HF repo id
         subfolder: subfolder in the repo (galileo-base-patch8 / nano / tiny)
-        mode: 'per_frame' — each frame independently; 'joint' — all at once
+        mode: reserved for compatibility
         in_channels: S2 bands (10 for PASTIS)
         img_size: spatial size (128)
         freeze: freeze encoder weights
         output_scales: how many feature scales to return (1-4)
+        temporal_chunk_size: number of consecutive dates per Galileo call.
+            Use 4 by default; set to 1 to recover per-frame extraction.
     """
 
     def __init__(
         self,
         model_name: str = "BiliSakura/GALILEO-transformers",
         subfolder: str = "galileo-base-patch8",
-        mode: Literal["per_frame", "joint"] = "per_frame",
+        mode: Literal["chunked", "per_frame", "joint"] = "chunked",
         in_channels: int = 10,
         img_size: int = 128,
         freeze: bool = False,
         output_scales: int = 4,
+        temporal_chunk_size: int = 4,
     ):
         super().__init__()
         self.mode = mode
@@ -130,6 +133,7 @@ class GalileoEncoder(nn.Module):
         self.img_size = img_size
         self.output_scales = output_scales
         self.freeze = freeze
+        self.temporal_chunk_size = max(int(temporal_chunk_size), 1)
 
         local_path = os.path.join("pretrained", subfolder)
         self._using_placeholder = False
@@ -177,42 +181,43 @@ class GalileoEncoder(nn.Module):
         return self._out_channels
 
     def _build_galileo_inputs(self, x: torch.Tensor, months: torch.Tensor = None):
-        """Convert (B, C, H, W) tensor to Galileo's multimodal input dict.
+        """Convert S2 tensor to Galileo's multimodal input dict.
 
         Args:
-            x: (B, C, H, W) — S2 10-band image
-            months: (B,) long, month values
+            x: (B, T, C, H, W) or (B, C, H, W) — S2 10-band images
+            months: (B, T) or (B,) long, month values
 
         Returns:
             dict with space_time_x, space_x, time_x, static_x, masks, months, patch_size
         """
-        B, C, H, W = x.shape
+        if x.dim() == 4:
+            x = x.unsqueeze(1)
+
+        B, T, C, H, W = x.shape
         device = x.device
-        T = 1  # per-frame mode
 
         # --- space_time_x: (B, H, W, T, 13) ---
         # Fill S2 bands (10 bands → indices 2-11 in space_time)
         s_t_x = torch.zeros(B, H, W, T, SPACETIME_CHANNELS, device=device, dtype=x.dtype)
-        for i, idx in enumerate(S2_BANDS_IN_SPACETIME):
-            s_t_x[:, :, :, 0, idx] = x[:, i]  # x[:, i] is (B, H, W)
+        s_t_x[:, :, :, :, S2_BANDS_IN_SPACETIME] = x.permute(0, 3, 4, 1, 2)
 
         # Compute NDVI: (B8 - B4) / (B8 + B4 + 1e-6)
-        b8 = x[:, 6]   # B8 is 7th PASTIS band (index 6 in 0-based 10-band)
-        b4 = x[:, 2]   # B4 is 3rd PASTIS band
-        ndvi = (b8 - b4) / (b8 + b4 + 1e-6)  # (B, H, W)
-        s_t_x[:, :, :, 0, 12] = ndvi
+        b8 = x[:, :, 6]   # B8 is 7th PASTIS band (index 6 in 0-based 10-band)
+        b4 = x[:, :, 2]   # B4 is 3rd PASTIS band
+        ndvi = (b8 - b4) / (b8 + b4 + 1e-6)  # (B, T, H, W)
+        s_t_x[:, :, :, :, 12] = ndvi.permute(0, 2, 3, 1)
 
         # --- space_time_mask: (B, H, W, T, 7 groups) ---
         # S1 group (idx 0): mask=1 (missing)
         # S2 groups (idx 1-5): mask=0 (present)
         # NDVI group (idx 6): mask=0 (present)
         s_t_m = torch.ones(B, H, W, T, NUM_SPACETIME_GROUPS, device=device, dtype=x.dtype)
-        s_t_m[:, :, :, 0, 1] = 0  # S2_RGB
-        s_t_m[:, :, :, 0, 2] = 0  # S2_Red_Edge
-        s_t_m[:, :, :, 0, 3] = 0  # S2_NIR_10m
-        s_t_m[:, :, :, 0, 4] = 0  # S2_NIR_20m
-        s_t_m[:, :, :, 0, 5] = 0  # S2_SWIR
-        s_t_m[:, :, :, 0, 6] = 0  # NDVI
+        s_t_m[:, :, :, :, 1] = 0  # S2_RGB
+        s_t_m[:, :, :, :, 2] = 0  # S2_Red_Edge
+        s_t_m[:, :, :, :, 3] = 0  # S2_NIR_10m
+        s_t_m[:, :, :, :, 4] = 0  # S2_NIR_20m
+        s_t_m[:, :, :, :, 5] = 0  # S2_SWIR
+        s_t_m[:, :, :, :, 6] = 0  # NDVI
 
         # --- space_x: (B, H, W, 16) all zero, mask all 1 ---
         sp_x = torch.zeros(B, H, W, SPACE_CHANNELS, device=device, dtype=x.dtype)
@@ -252,14 +257,17 @@ class GalileoEncoder(nn.Module):
             months: (B, T) optional month values (1-12)
 
         Returns:
-            [F1..F4], each (B, T, C_i, H_i, W_i)
+            [F1..F4], each (B, K, C_i, H_i, W_i), where
+            K = ceil(T / temporal_chunk_size).
         """
         B, T_frames, C, H, W = x.shape
+        chunk_size = self.temporal_chunk_size
 
         all_feats = []
-        for t in range(T_frames):
-            x_t = x[:, t]  # (B, C, H, W)
-            m_t = months[:, t] if months is not None else None
+        for start in range(0, T_frames, chunk_size):
+            end = min(start + chunk_size, T_frames)
+            x_t = x[:, start:end]  # (B, Tc, C, H, W)
+            m_t = months[:, start:end] if months is not None else None
             inputs = self._build_galileo_inputs(x_t, m_t)
             feats = self._forward_impl(inputs)  # [(B, C_i, H_i, W_i)]
             all_feats.append(feats)
@@ -270,8 +278,8 @@ class GalileoEncoder(nn.Module):
         """Forward through Galileo, extract multi-scale feature pyramid."""
         if self._using_placeholder:
             # Reconstruct PASTIS S2 bands from the Galileo-style input tensor.
-            s_t = galileo_inputs["space_time_x"]  # (B, H, W, 1, 13)
-            x_2d = s_t[:, :, :, 0, S2_BANDS_IN_SPACETIME]
+            s_t = galileo_inputs["space_time_x"]  # (B, H, W, T, 13)
+            x_2d = s_t[:, :, :, :, S2_BANDS_IN_SPACETIME].mean(dim=3)
             x_2d = x_2d.permute(0, 3, 1, 2).contiguous()  # (B, 10, H, W)
             return self.encoder(x_2d)
 

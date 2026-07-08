@@ -12,6 +12,7 @@
   [GALILEO-transformers](https://huggingface.co/BiliSakura/GALILEO-transformers)。
 - [ ] P0 确认 `models/encoders/galileo_encoder.py` 的真实模型路径全程基于 `huggingface/transformers`，不要混用原始仓库中的非 HF 推理入口。
 - [ ] P0 SSL encoder 提取特征时禁止输入图像缩放；保持 PASTIS 原始 `128x128` 输入，不因为 SSL 模型预训练尺寸而 resize。
+- [ ] P0 主实验默认使用 `temporal_chunk_size=4`，即 Galileo 每次接收 4 个连续时相；`temporal_chunk_size=1` 仅作为调试或消融选项，不作为后续主任务。
 - [ ] P0 在 encoder forward 或数据流检查中加入 shape 断言，确保进入 SSL 模型 wrapper 前仍为原始空间尺寸。
 - [ ] P0 固定并记录关键依赖版本：`torch`、`torchvision`、`transformers`、`huggingface-hub`、`accelerate`、`segmentation-models-pytorch`。
 - [ ] P0 增加环境验证脚本，例如 `scripts/check_env.py`，检查 CUDA、PASTIS、Galileo 权重、输出形状。
@@ -65,6 +66,7 @@
   - `feat_3`
   - `encoder_name`
   - `encoder_subfolder`
+  - `temporal_chunk_size`
   - `config_hash`
 - [ ] P0 新增 `CachedFeatureDataset`，训练时直接读取 `.npz` 特征，跳过 encoder。
 - [ ] P1 支持缓存完整性检查：样本数、fold、feature shape、Galileo 权重版本。
