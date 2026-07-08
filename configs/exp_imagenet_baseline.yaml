@@ -1,0 +1,24 @@
+# ─── Baseline: ImageNet + Late Fusion ───
+# Same 3D-DPT architecture, ImageNet pretrained encoder
+# Ablation to isolate SSL contribution
+
+model:
+  encoder:
+    type: "imagenet"
+    name: "resnet50"
+    in_channels: 10
+    weights: "imagenet"
+    depth: 5
+    output_stride: 16
+  fusion_strategy: "late"
+  decoder_channels: 256
+  temporal_module: "attention"
+  collapse_schedule: [3, 2, 1, 0]
+
+training:
+  batch_size: 4
+  num_epochs: 50
+  learning_rate: 0.0005
+
+logging:
+  experiment_name: "imagenet_late_fusion"

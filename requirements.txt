@@ -1,0 +1,25 @@
+# PreSSL-CropSeg: Pre-trained SSL Model for Temporal Crop Segmentation
+# Based on PASTIS benchmark + segmentation_models.pytorch
+
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+pandas>=2.0.0
+geopandas>=0.14.0
+pyyaml>=6.0
+
+# Segmentation models
+segmentation-models-pytorch>=0.4.0
+
+# Training utilities
+tqdm>=4.65.0
+tensorboard>=2.13.0
+wandb>=0.15.0
+
+# Metrics & evaluation
+scikit-learn>=1.3.0
+scipy>=1.10.0
+
+# Optional: SSL pretrained models
+timm>=0.9.0

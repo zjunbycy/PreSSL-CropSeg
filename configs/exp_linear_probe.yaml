@@ -1,0 +1,23 @@
+# ─── Linear Probing: Galileo encoder frozen ───
+# Pure test of SSL pretrained feature quality
+model:
+  encoder:
+    type: "galileo"
+    model_name: "BiliSakura/GALILEO-transformers"
+    mode: "per_frame"
+    in_channels: 10
+    img_size: 128
+    freeze: true                        # frozen!
+    output_scales: 4
+  fusion_strategy: "late"
+  decoder_channels: 256
+  temporal_module: "attention"
+  collapse_schedule: [3, 2, 1, 0]
+
+training:
+  batch_size: 4
+  num_epochs: 50
+  learning_rate: 0.001                 # higher LR for linear probe
+
+logging:
+  experiment_name: "galileo_linear_probe"

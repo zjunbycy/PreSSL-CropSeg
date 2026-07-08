@@ -1,0 +1,22 @@
+# ─── Experiment: Galileo + Bottleneck Fusion (Mid-level) ───
+# Inherits defaults, overrides fusion strategy
+
+model:
+  encoder:
+    type: "galileo"
+    model_name: "BiliSakura/GALILEO-transformers"
+    mode: "per_frame"
+    in_channels: 10
+    img_size: 128
+    freeze: false
+    output_scales: 4
+  fusion_strategy: "bottleneck"
+  decoder_channels: 256
+
+training:
+  batch_size: 4
+  num_epochs: 50
+  learning_rate: 0.0005
+
+logging:
+  experiment_name: "galileo_bottleneck_fusion"

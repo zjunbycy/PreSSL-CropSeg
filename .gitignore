@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data (large files)
+data/PASTIS/
+data/PASTIS-R/
+*.npy
+!data/*.py
+
+# Logs & checkpoints
+logs/
+checkpoints/
+*.pth
+*.pt
+
+# Tensorboard
+runs/
+
+# Wandb
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Slides & misc
+slides.pdf
+slides.pptx
+
+# Temporary
+/tmp/
+*.tmp
