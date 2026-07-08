@@ -63,6 +63,27 @@ ENCODER_REGISTRY = {
 }
 
 
+def _dates_to_months(dates: torch.Tensor, ref_year: int = 2018) -> torch.Tensor:
+    """Convert day-offset dates to month numbers (1-12).
+
+    Args:
+        dates: (B, T) — days since reference_date (e.g. 2018-09-01)
+        ref_year: year of the reference date
+
+    Returns:
+        (B, T) — month numbers 1-12
+    """
+    import datetime as dt
+    ref_date = dt.date(ref_year, 9, 1)
+    months = torch.zeros_like(dates, dtype=torch.long)
+    for b in range(dates.shape[0]):
+        for t in range(dates.shape[1]):
+            d = dates[b, t].item()
+            actual = ref_date + dt.timedelta(days=int(d))
+            months[b, t] = actual.month
+    return months
+
+
 class TemporalSegModel(nn.Module):
     """Unified model supporting all three fusion strategies.
 
@@ -90,38 +111,23 @@ class TemporalSegModel(nn.Module):
         self.fusion_strategy = model_cfg.get("fusion_strategy", "late")
         self.num_classes = data_cfg["num_classes"]
 
-        # Must resolve encoder out_channels before building decoder/fusion
-        # We'll lazily infer on first forward if not set manually
+        # ── Init all attributes before eager build ──
         self._encoder_channels = None
+        self._decoder_ch = model_cfg.get("decoder_channels", 256)
+        self._temp_mod = model_cfg.get("temporal_module", "attention")
+        self._collapse_sched = model_cfg.get("collapse_schedule", None)
+        self.bottleneck_fusion = None
+        self.decoder = None
+        self.decision_fusion = DecisionFusion() if self.fusion_strategy == "decision" else None
 
-        # ── Build fusion + decoder ──
-        decoder_ch = model_cfg.get("decoder_channels", 256)
-
-        if self.fusion_strategy == "bottleneck":
-            # Wait until encoder channels are known
-            self.bottleneck_fusion = None  # built after first forward
-            self.decoder = None  # built after first forward
-            self._decoder_ch = decoder_ch
-
-        elif self.fusion_strategy == "late":
-            # 3D-Aware DPT: encoder → temporal collapse → DPT
-            temp_mod = model_cfg.get("temporal_module", "attention")
-            collapse_sched = model_cfg.get("collapse_schedule", None)
-            self.decoder = None  # built after first forward
-            self._decoder_ch = decoder_ch
-            self._temp_mod = temp_mod
-            self._collapse_sched = collapse_sched
-
-        elif self.fusion_strategy == "decision":
-            self.decoder = None  # built after first forward
-            self.decision_fusion = DecisionFusion()
-            self._decoder_ch = decoder_ch
-
-        else:
-            raise ValueError(f"Unknown fusion_strategy: {self.fusion_strategy}")
+        # ── Eagerly probe encoder to build decoder ──
+        dummy = torch.randn(1, 2, 10, 128, 128)
+        with torch.no_grad():
+            features = self.encoder(dummy)
+        self._ensure_built(features)
 
     def _ensure_built(self, features: list):
-        """Lazy-build fusion/decoder modules after seeing encoder output dims."""
+        """Build fusion/decoder modules after seeing encoder output dims."""
         if self._encoder_channels is not None:
             return
 
@@ -137,7 +143,7 @@ class TemporalSegModel(nn.Module):
             self.decoder = TemporalAwareDPTDecoder(
                 channels, self._decoder_ch, self.num_classes,
                 collapse_schedule=self._collapse_sched,
-                temporal_module=getattr(self, '_temp_mod', 'attention'),
+                temporal_module=self._temp_mod,
             )
         elif self.fusion_strategy == "decision":
             self.decoder = PretrainedDPTDecoder(
@@ -152,35 +158,40 @@ class TemporalSegModel(nn.Module):
         """
         Args:
             x: (B, T, C, H, W)
-            dates: (B, T) acquisition dates (optional)
+            dates: (B, T) acquisition dates as day offsets from reference
 
         Returns:
             (B, num_classes, H, W) logits
         """
+        # ── Convert dates to months for Galileo ──
+        months = None
+        if dates is not None and self.encoder_type == "galileo":
+            months = _dates_to_months(dates)
+
         # ── Encoder ──
-        features = self.encoder(x)  # [F1..F4], each (B, T, C_i, H_i, W_i)
+        if self.encoder_type == "galileo":
+            features = self.encoder(x, months=months)
+        else:
+            features = self.encoder(x)
+
         self._ensure_built(features)
 
         # ── Fusion + Decoder ──
         if self.fusion_strategy == "bottleneck":
-            # Mid-level: collapse T → standard DPT
-            spatial_feats = self.bottleneck_fusion(features, dates)  # [(B, C_i, H_i, W_i)]
+            spatial_feats = self.bottleneck_fusion(features, dates)
             return self.decoder(spatial_feats)
 
         elif self.fusion_strategy == "late":
-            # Late: 3D-aware DPT with T collapse inside
             return self.decoder(features)
 
         elif self.fusion_strategy == "decision":
-            # Decision: per-frame DPT → soft vote
-            # temporal_dpt_decoder handles T internally, so per-frame:
             B, T = x.shape[0], x.shape[1]
             per_frame_logits = []
             for t in range(T):
-                feat_t = [f[:, t] for f in features]  # [(B, C_i, H_i, W_i)]
-                logit_t = self.decoder(feat_t)  # (B, num_classes, H, W)
+                feat_t = [f[:, t] for f in features]
+                logit_t = self.decoder(feat_t)
                 per_frame_logits.append(logit_t)
-            stacked = torch.stack(per_frame_logits, dim=1)  # (B, T, num_classes, H, W)
+            stacked = torch.stack(per_frame_logits, dim=1)
             return self.decision_fusion(stacked)
 
         raise ValueError(f"Unknown fusion_strategy: {self.fusion_strategy}")

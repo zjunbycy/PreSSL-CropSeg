@@ -4,6 +4,7 @@ model:
   encoder:
     type: "galileo"
     model_name: "BiliSakura/GALILEO-transformers"
+    subfolder: "galileo-base-patch8"
     mode: "per_frame"
     in_channels: 10
     img_size: 128

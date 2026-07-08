@@ -43,11 +43,46 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = True
 
 
+def deep_merge(base: dict, override: dict) -> dict:
+    """Merge override into base. override wins.
+
+    Dicts containing 'type' key are treated as atomic config blocks
+    and fully replaced, not recursively merged. This prevents
+    Galileo encoder fields from leaking into ImageNet configs.
+    """
+    result = base.copy()
+    for k, v in override.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            # Atomic block: has 'type' key → full replace, no recursion
+            if 'type' in v or 'type' in result[k]:
+                result[k] = v
+            else:
+                result[k] = deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def load_config(config_path: str) -> dict:
+    """Load config, merging with defaults if partial experiment config."""
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    default_path = os.path.join(os.path.dirname(config_path), "default.yaml")
+    config_name = os.path.basename(config_path)
+    if os.path.exists(default_path) and config_name != "default.yaml":
+        with open(default_path, "r", encoding="utf-8") as f:
+            default_cfg = yaml.safe_load(f)
+        cfg = deep_merge(default_cfg, cfg)
+
+    return cfg
+
+
 def main():
     args = parse_args()
 
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
+
 
     # CLI overrides
     if args.data_root:

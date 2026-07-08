@@ -78,7 +78,14 @@ class TemporalCollapseAttention(nn.Module):
 
     def __init__(self, channels: int, num_heads: int = 4):
         super().__init__()
-        self.temporal_cls = nn.Parameter(torch.zeros(1, 1, channels, 1, 1))
+        # Ensure embed_dim divisible by num_heads
+        if channels % num_heads != 0:
+            num_heads = 1
+            while num_heads <= 8:
+                if channels % num_heads == 0:
+                    break
+                num_heads += 1
+        self.temporal_cls = nn.Parameter(torch.zeros(1, 1, channels))
         self.attn = nn.MultiheadAttention(
             channels, num_heads, batch_first=True, dropout=0.1
         )
@@ -180,6 +187,12 @@ class FusionBlock(nn.Module):
 
     def __init__(self, channels: int, num_heads: int = 4):
         super().__init__()
+        # Auto-adjust heads for divisibility
+        if channels % num_heads != 0:
+            num_heads = 1
+            for h in [2, 4, 8]:
+                if channels % h == 0:
+                    num_heads = h
         self.res_conv1 = ResidualConvUnit(channels)
         self.res_conv2 = ResidualConvUnit(channels)
         self.attn = nn.MultiheadAttention(channels, num_heads,

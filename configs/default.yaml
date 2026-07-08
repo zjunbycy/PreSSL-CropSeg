@@ -19,10 +19,11 @@ model:
   encoder:
     type: "galileo"                       # galileo | imagenet
     model_name: "BiliSakura/GALILEO-transformers"
+    subfolder: "galileo-base-patch8"
     mode: "per_frame"                     # per_frame | joint
     in_channels: 10
     img_size: 128
-    freeze: false                         # true for linear probing
+    freeze: true                         # true for linear probing
     output_scales: 4
 
   # ── Fusion Strategy ──
