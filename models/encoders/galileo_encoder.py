@@ -21,6 +21,7 @@ We reshape N_patches to spatial grid for multi-scale feature pyramid.
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List, Literal
 
 # Band indices in space_time_x (13 bands total):
@@ -44,6 +45,37 @@ NUM_STATIC_GROUPS = 4     # LS, location, DW_static, WC_static
 
 # Which group each S2 band belongs to (positions in space_time_mask)
 S2_GROUP_MASK_IDX = [1, 1, 1, 2, 2, 2, 3, 4, 5, 5]  # per S2 band in order
+
+
+class _PlaceholderGalileoEncoder(nn.Module):
+    """Small local fallback used when Galileo weights or dependencies are absent."""
+
+    def __init__(self, in_channels: int = 10, output_scales: int = 4):
+        super().__init__()
+        channels = [64, 128, 256, 512][:output_scales]
+        self.stages = nn.ModuleList()
+
+        prev = in_channels
+        for i, ch in enumerate(channels):
+            stride = 4 if i == 0 else 2
+            self.stages.append(
+                nn.Sequential(
+                    nn.Conv2d(prev, ch, kernel_size=3, stride=stride, padding=1, bias=False),
+                    nn.BatchNorm2d(ch),
+                    nn.GELU(),
+                    nn.Conv2d(ch, ch, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(ch),
+                    nn.GELU(),
+                )
+            )
+            prev = ch
+
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        features = []
+        for stage in self.stages:
+            x = stage(x)
+            features.append(x)
+        return features
 
 
 def _download_hf_subfolder(model_name: str, subfolder: str, local_dir: str) -> str:
@@ -97,13 +129,15 @@ class GalileoEncoder(nn.Module):
         self.in_channels = in_channels
         self.img_size = img_size
         self.output_scales = output_scales
+        self.freeze = freeze
 
         local_path = os.path.join("pretrained", subfolder)
-        if not os.path.exists(os.path.join(local_path, "config.json")):
-            print(f"[Galileo] Downloading {subfolder} from {model_name} ...")
-            _download_hf_subfolder(model_name, subfolder, local_path)
-
+        self._using_placeholder = False
         try:
+            if not os.path.exists(os.path.join(local_path, "config.json")):
+                print(f"[Galileo] Downloading {subfolder} from {model_name} ...")
+                _download_hf_subfolder(model_name, subfolder, local_path)
+
             from transformers import AutoModel
             self.encoder = AutoModel.from_pretrained(local_path, trust_remote_code=True)
             print(f"[Galileo] Loaded {subfolder} from {local_path}")
@@ -111,6 +145,7 @@ class GalileoEncoder(nn.Module):
             print(f"[Galileo] Could not load {subfolder}: {e}")
             print(f"[Galileo] Using placeholder")
             self.encoder = self._build_placeholder()
+            self._using_placeholder = True
 
         if freeze:
             self.encoder.eval()
@@ -123,7 +158,13 @@ class GalileoEncoder(nn.Module):
         self._patch_size = 8
 
     def _build_placeholder(self):
-        return nn.Identity()
+        return _PlaceholderGalileoEncoder(self.in_channels, self.output_scales)
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze:
+            self.encoder.eval()
+        return self
 
     @property
     def out_channels(self) -> List[int]:
@@ -227,21 +268,12 @@ class GalileoEncoder(nn.Module):
 
     def _forward_impl(self, galileo_inputs: dict) -> List[torch.Tensor]:
         """Forward through Galileo, extract multi-scale feature pyramid."""
-        if isinstance(self.encoder, nn.Identity):
-            # Placeholder: use space_time_x mean across T and C dims
+        if self._using_placeholder:
+            # Reconstruct PASTIS S2 bands from the Galileo-style input tensor.
             s_t = galileo_inputs["space_time_x"]  # (B, H, W, 1, 13)
-            x_2d = s_t.mean(dim=-1).squeeze(3).permute(0, 3, 1, 2)  # (B, 13, H, W)
-            B, C_img, H_img, W_img = x_2d.shape
-            out = []
-            for i in range(self.output_scales):
-                target = max(H_img // (4 * (2 ** i)), 1)
-                pooled = nn.functional.adaptive_avg_pool2d(x_2d, (target, target))
-                if pooled.shape[1] > 64 * (2 ** i):
-                    pooled = nn.functional.adaptive_avg_pool1d(
-                        pooled.transpose(1, -1), 64 * (2 ** i)
-                    ).transpose(1, -1)
-                out.append(pooled)
-            return out[:self.output_scales]
+            x_2d = s_t[:, :, :, 0, S2_BANDS_IN_SPACETIME]
+            x_2d = x_2d.permute(0, 3, 1, 2).contiguous()  # (B, 10, H, W)
+            return self.encoder(x_2d)
 
         # Real Galileo model
         output = self.encoder(**galileo_inputs)
@@ -254,10 +286,10 @@ class GalileoEncoder(nn.Module):
 
         features = []
         for i in range(self.output_scales):
-            target = max(self.img_size // (2 ** i), 1)
+            target = max(self.img_size // (4 * (2 ** i)), 1)
             n = target * target
             if n != patches_flat.shape[1]:
-                pooled = nn.functional.adaptive_avg_pool1d(
+                pooled = F.adaptive_avg_pool1d(
                     patches_flat.transpose(1, 2), n
                 ).transpose(1, 2)  # (B, n, D)
             else:

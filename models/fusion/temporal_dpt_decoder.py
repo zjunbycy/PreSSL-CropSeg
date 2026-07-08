@@ -131,7 +131,7 @@ class TemporalCollapseAttention(nn.Module):
 class ReassembleBlock(nn.Module):
     """Project encoder features to uniform dim, optionally with T collapse."""
 
-    def __init__(self, in_ch: int, out_ch: int, scale: int, collapse_t: bool = True):
+    def __init__(self, in_ch: int, out_ch: int, scale: int = 1, collapse_t: bool = True):
         super().__init__()
         self.scale = scale
         self.collapse_t = collapse_t
@@ -202,12 +202,13 @@ class FusionBlock(nn.Module):
     def forward(self, features: List[torch.Tensor]) -> torch.Tensor:
         """
         Args:
-            features: list of (B, C, H, W) at different scales, sorted by resolution
-                      smallest → largest
+            features: list of (B, C, H, W) at different scales
 
         Returns:
             (B, C, H, W) fused feature at highest resolution
         """
+        features = sorted(features, key=lambda f: f.shape[-2] * f.shape[-1])
+
         # Start from the coarsest feature
         x = features[0]
         x = self.res_conv1(x)
@@ -243,7 +244,7 @@ class TemporalAwareDPTDecoder(nn.Module):
     Args:
         encoder_channels: [C1, C2, C3, C4] from encoder
         decoder_channels: unified feature dim for DPT (default 256)
-        num_classes: output classes (19 for PASTIS)
+        num_classes: output classes (20 for the local PASTIS labels 0..19)
         collapse_schedule: how many 3D conv stages per scale (e.g. [3, 2, 1, 0])
                            more stages → more aggressive T reduction at that scale
         temporal_module: 'conv3d' or 'attention'
@@ -253,7 +254,7 @@ class TemporalAwareDPTDecoder(nn.Module):
         self,
         encoder_channels: List[int],
         decoder_channels: int = 256,
-        num_classes: int = 19,
+        num_classes: int = 20,
         collapse_schedule: Optional[List[int]] = None,
         temporal_module: str = "attention",
     ):
@@ -265,11 +266,9 @@ class TemporalAwareDPTDecoder(nn.Module):
             collapse_schedule = [3, 2, 1, 0][:n_scales]
         self.collapse_schedule = collapse_schedule
 
-        # Reassemble blocks: project each encoder scale → decoder_channels
-        scales = [4, 8, 16, 32][:n_scales]
         self.reassembles = nn.ModuleList([
-            ReassembleBlock(ec, decoder_channels, s)
-            for ec, s in zip(encoder_channels, scales)
+            ReassembleBlock(ec, decoder_channels)
+            for ec in encoder_channels
         ])
 
         # Temporal collapse per scale (can be identity if collapse_schedule[i]==0)

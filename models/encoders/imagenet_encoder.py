@@ -24,9 +24,11 @@ class ImageNetEncoder(nn.Module):
         weights: Optional[str] = "imagenet",
         depth: int = 5,
         output_stride: int = 16,
+        output_scales: int = 4,
     ):
         super().__init__()
         self.name = name
+        self.output_scales = output_scales
 
         if weights is not None:
             self.encoder = smp.encoders.get_encoder(
@@ -42,7 +44,7 @@ class ImageNetEncoder(nn.Module):
             )
 
         self._depth = depth
-        self._out_channels = self.encoder.out_channels
+        self._out_channels = self.encoder.out_channels[-self.output_scales:]
 
     def _adapt_first_conv(self, in_channels: int):
         for attr in ['conv1', 'patch_embed', 'stem', 'conv_stem']:
@@ -81,4 +83,5 @@ class ImageNetEncoder(nn.Module):
         B, T, C, H, W = x.shape
         x_flat = x.reshape(B * T, C, H, W)
         feats_flat = self.encoder(x_flat)  # [(B*T, C_i, H_i, W_i)]
+        feats_flat = feats_flat[-self.output_scales:]
         return [f.reshape(B, T, *f.shape[1:]) for f in feats_flat]

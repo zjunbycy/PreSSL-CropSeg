@@ -24,7 +24,7 @@ class PretrainedDPTDecoder(nn.Module):
         self,
         encoder_channels: list,
         decoder_channels: int = 256,
-        num_classes: int = 19,
+        num_classes: int = 20,
     ):
         super().__init__()
         self.decoder_channels = decoder_channels
@@ -33,10 +33,9 @@ class PretrainedDPTDecoder(nn.Module):
             ReassembleBlock, FusionBlock, ResidualConvUnit,
         )
 
-        scales = [4, 8, 16, 32][:len(encoder_channels)]
         self.reassembles = nn.ModuleList([
-            ReassembleBlock(ec, decoder_channels, s)
-            for ec, s in zip(encoder_channels, scales)
+            ReassembleBlock(ec, decoder_channels)
+            for ec in encoder_channels
         ])
         self.fusion = FusionBlock(decoder_channels)
 
@@ -92,7 +91,7 @@ class TemporalSegModel(nn.Module):
         model.encoder.*: passed to encoder constructor
         model.fusion_strategy: "bottleneck" | "late" | "decision"
         model.decoder_channels: int (256)
-        data.num_classes: int (19)
+        data.num_classes: int
     """
 
     def __init__(self, cfg: dict):
@@ -121,7 +120,10 @@ class TemporalSegModel(nn.Module):
         self.decision_fusion = DecisionFusion() if self.fusion_strategy == "decision" else None
 
         # ── Eagerly probe encoder to build decoder ──
-        dummy = torch.randn(1, 2, 10, 128, 128)
+        enc_cfg = model_cfg.get("encoder", {})
+        in_channels = enc_cfg.get("in_channels", 10)
+        img_size = enc_cfg.get("img_size", 128)
+        dummy = torch.randn(1, 2, in_channels, img_size, img_size)
         with torch.no_grad():
             features = self.encoder(dummy)
         self._ensure_built(features)
@@ -149,6 +151,8 @@ class TemporalSegModel(nn.Module):
             self.decoder = PretrainedDPTDecoder(
                 channels, self._decoder_ch, self.num_classes,
             )
+        else:
+            raise ValueError(f"Unknown fusion_strategy: {self.fusion_strategy}")
 
     def forward(
         self,
@@ -179,10 +183,10 @@ class TemporalSegModel(nn.Module):
         # ── Fusion + Decoder ──
         if self.fusion_strategy == "bottleneck":
             spatial_feats = self.bottleneck_fusion(features, dates)
-            return self.decoder(spatial_feats)
+            logits = self.decoder(spatial_feats)
 
         elif self.fusion_strategy == "late":
-            return self.decoder(features)
+            logits = self.decoder(features)
 
         elif self.fusion_strategy == "decision":
             B, T = x.shape[0], x.shape[1]
@@ -192,9 +196,16 @@ class TemporalSegModel(nn.Module):
                 logit_t = self.decoder(feat_t)
                 per_frame_logits.append(logit_t)
             stacked = torch.stack(per_frame_logits, dim=1)
-            return self.decision_fusion(stacked)
+            logits = self.decision_fusion(stacked)
 
-        raise ValueError(f"Unknown fusion_strategy: {self.fusion_strategy}")
+        else:
+            raise ValueError(f"Unknown fusion_strategy: {self.fusion_strategy}")
+
+        if logits.shape[-2:] != x.shape[-2:]:
+            logits = torch.nn.functional.interpolate(
+                logits, size=x.shape[-2:], mode="bilinear", align_corners=False
+            )
+        return logits
 
 
 def build_model(cfg: dict) -> TemporalSegModel:

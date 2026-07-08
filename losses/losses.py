@@ -16,6 +16,7 @@ class DiceLoss(nn.Module):
         num_classes = logits.shape[1]
         target_oh = F.one_hot(target.clamp(0, num_classes - 1), num_classes).permute(0, 3, 1, 2).float()
         mask = (target != self.ignore_index).unsqueeze(1).float()
+        probs = probs * mask
         target_oh = target_oh * mask
         intersection = (probs * target_oh).sum(dim=(0, 2, 3))
         union = probs.sum(dim=(0, 2, 3)) + target_oh.sum(dim=(0, 2, 3))
@@ -32,7 +33,8 @@ class FocalLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         log_probs = F.log_softmax(logits, dim=1)
-        log_pt = log_probs.gather(1, target.unsqueeze(1)).squeeze(1)
+        target_safe = target.clamp(0, logits.shape[1] - 1)
+        log_pt = log_probs.gather(1, target_safe.unsqueeze(1)).squeeze(1)
         pt = log_pt.exp()
         focal_weight = (1 - pt) ** self.gamma
         mask = (target != self.ignore_index).float()

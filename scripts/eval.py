@@ -4,15 +4,14 @@ import os
 import sys
 
 import torch
-import yaml
-from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from data.pastis_dataset import PASTIS_Dataset
 from data.collate import pad_collate
-from models.temporal_seg_model import TemporalSegModel
+from models.temporal_seg_model import build_model
 from trainers.trainer import evaluate
+from scripts.train import load_config
 
 
 def parse_args():
@@ -34,9 +33,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Load config
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     if args.data_root:
         cfg["data"]["root"] = args.data_root
@@ -70,18 +67,22 @@ def main():
         shuffle=False,
         num_workers=cfg["training"].get("num_workers", 4),
         collate_fn=pad_collate,
-        pin_memory=True,
+        pin_memory=device.type == "cuda",
     )
 
     # Model
-    model = TemporalSegModel(cfg)
+    model = build_model(cfg)
 
     # Load checkpoint
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     print(f"Loaded checkpoint from {args.checkpoint}")
     print(f"  Epoch: {checkpoint.get('epoch', 'N/A')}")
-    print(f"  Val mIoU: {checkpoint.get('val_miou', 'N/A'):.4f}")
+    val_miou = checkpoint.get("val_miou", None)
+    if isinstance(val_miou, (float, int)):
+        print(f"  Val mIoU: {val_miou:.4f}")
+    else:
+        print("  Val mIoU: N/A")
 
     model.to(device)
 

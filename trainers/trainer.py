@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -58,7 +58,10 @@ class Trainer:
         self.max_epochs = train_cfg.get("num_epochs", 100)
         self.grad_clip = train_cfg.get("grad_clip", None)
         self.use_amp = train_cfg.get("amp", False)
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.max_train_batches = train_cfg.get("max_train_batches", None)
+        self.max_val_batches = train_cfg.get("max_val_batches", None)
+        self.max_timesteps = train_cfg.get("max_timesteps", None)
+        self.scaler = GradScaler(self.device.type, enabled=self.use_amp)
 
         # Data
         self.num_classes = cfg["data"]["num_classes"]
@@ -68,7 +71,7 @@ class Trainer:
 
         # State
         self.current_epoch = 0
-        self.best_val_miou = 0.0
+        self.best_val_miou = float("-inf")
         self.best_epoch = 0
         self.checkpoints: list = []  # (miou, path) tuples
 
@@ -87,8 +90,12 @@ class Trainer:
         total_loss = 0.0
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch} [Train]")
+        n_batches = 0
         for batch_idx, batch in enumerate(pbar):
+            if self.max_train_batches is not None and batch_idx >= self.max_train_batches:
+                break
             (data, dates), target = batch
+            n_batches += 1
 
             # Cast to float and move to device
             if isinstance(data, dict):
@@ -105,6 +112,11 @@ class Trainer:
 
             target = target.long().to(self.device)
 
+            if self.max_timesteps is not None:
+                data_tensor = data_tensor[:, :self.max_timesteps]
+                if dates_tensor is not None:
+                    dates_tensor = dates_tensor[:, :self.max_timesteps]
+
             # Augmentation
             if self.augment is not None:
                 data_tensor, target = self.augment(data_tensor, target)
@@ -112,7 +124,7 @@ class Trainer:
             # Forward
             self.optimizer.zero_grad()
 
-            with autocast(enabled=self.use_amp):
+            with autocast(device_type=self.device.type, enabled=self.use_amp):
                 output = self.model(data_tensor, dates_tensor)
                 loss = self.criterion(output, target)
 
@@ -139,7 +151,7 @@ class Trainer:
 
         # Epoch-level metrics
         metrics = self.train_metrics.compute()
-        metrics["loss"] = total_loss / len(self.train_loader)
+        metrics["loss"] = total_loss / max(n_batches, 1)
 
         return metrics
 
@@ -155,8 +167,12 @@ class Trainer:
         total_loss = 0.0
 
         pbar = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch} [Val]")
-        for batch in pbar:
+        n_batches = 0
+        for batch_idx, batch in enumerate(pbar):
+            if self.max_val_batches is not None and batch_idx >= self.max_val_batches:
+                break
             (data, dates), target = batch
+            n_batches += 1
 
             if isinstance(data, dict):
                 data = {k: v.float().to(self.device) for k, v in data.items()}
@@ -171,7 +187,12 @@ class Trainer:
 
             target = target.long().to(self.device)
 
-            with autocast(enabled=self.use_amp):
+            if self.max_timesteps is not None:
+                data_tensor = data_tensor[:, :self.max_timesteps]
+                if dates_tensor is not None:
+                    dates_tensor = dates_tensor[:, :self.max_timesteps]
+
+            with autocast(device_type=self.device.type, enabled=self.use_amp):
                 output = self.model(data_tensor, dates_tensor)
                 loss = self.criterion(output, target)
 
@@ -179,7 +200,7 @@ class Trainer:
             self.val_metrics.update(output, target)
 
         metrics = self.val_metrics.compute()
-        metrics["loss"] = total_loss / len(self.val_loader)
+        metrics["loss"] = total_loss / max(n_batches, 1)
 
         return metrics
 
@@ -258,7 +279,7 @@ class Trainer:
             if os.path.exists(old_path):
                 os.remove(old_path)
 
-        if val_miou > self.best_val_miou:
+        if val_miou >= self.best_val_miou:
             self.best_val_miou = val_miou
             self.best_epoch = self.current_epoch
             best_path = os.path.join(self.log_dir, "best_model.pth")

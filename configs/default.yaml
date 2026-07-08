@@ -10,7 +10,7 @@ data:
   test_folds: [5]
   target: "semantic"
   norm: true
-  num_classes: 19                         # 18 crops + background
+  num_classes: 20                         # PASTIS labels are 0..19
   reference_date: "2018-09-01"
   sats: ["S2"]
 

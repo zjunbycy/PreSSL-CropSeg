@@ -32,6 +32,11 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--max-train-batches", type=int, default=None)
+    parser.add_argument("--max-val-batches", type=int, default=None)
+    parser.add_argument("--max-timesteps", type=int, default=None)
+    parser.add_argument("--no-amp", action="store_true")
     return parser.parse_args()
 
 
@@ -93,12 +98,25 @@ def main():
         cfg["training"]["num_epochs"] = args.epochs
     if args.lr:
         cfg["training"]["learning_rate"] = args.lr
+    if args.num_workers is not None:
+        cfg["training"]["num_workers"] = args.num_workers
+    if args.max_train_batches is not None:
+        cfg["training"]["max_train_batches"] = args.max_train_batches
+    if args.max_val_batches is not None:
+        cfg["training"]["max_val_batches"] = args.max_val_batches
+    if args.max_timesteps is not None:
+        cfg["training"]["max_timesteps"] = args.max_timesteps
+    if args.no_amp:
+        cfg["training"]["amp"] = False
 
     set_seed(cfg["training"].get("seed", 42))
 
     device = torch.device(
         args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     )
+    if device.type != "cuda":
+        cfg["training"]["amp"] = False
+
     print(f"Device: {device}")
     print(f"Config: {args.config}")
     print(f"Encoder: {cfg['model']['encoder']['type']}")
@@ -130,7 +148,7 @@ def main():
         shuffle=True,
         num_workers=train_cfg.get("num_workers", 2),
         collate_fn=pad_collate,
-        pin_memory=True,
+        pin_memory=device.type == "cuda",
     )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -138,7 +156,7 @@ def main():
         shuffle=False,
         num_workers=train_cfg.get("num_workers", 2),
         collate_fn=pad_collate,
-        pin_memory=True,
+        pin_memory=device.type == "cuda",
     )
 
     # Model
