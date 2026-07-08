@@ -1,0 +1,59 @@
+# ─── Temporal Crop Segmentation with SSL Pretraining ───
+# Three fusion strategies: bottleneck | late | decision
+# Two encoder types:       galileo | imagenet
+
+data:
+  name: "PASTIS"
+  root: "data/PASTIS"
+  folds: [1, 2, 3]
+  val_folds: [4]
+  test_folds: [5]
+  target: "semantic"
+  norm: true
+  num_classes: 19                         # 18 crops + background
+  reference_date: "2018-09-01"
+  sats: ["S2"]
+
+model:
+  # ── Encoder ──
+  encoder:
+    type: "galileo"                       # galileo | imagenet
+    model_name: "BiliSakura/GALILEO-transformers"
+    mode: "per_frame"                     # per_frame | joint
+    in_channels: 10
+    img_size: 128
+    freeze: false                         # true for linear probing
+    output_scales: 4
+
+  # ── Fusion Strategy ──
+  fusion_strategy: "late"                 # bottleneck | late | decision
+  decoder_channels: 256
+  temporal_module: "attention"            # conv3d | attention (for late fusion)
+  collapse_schedule: [3, 2, 1, 0]        # T collapse stages per scale (late fusion)
+
+training:
+  batch_size: 4
+  num_epochs: 50
+  learning_rate: 0.0005
+  weight_decay: 0.0001
+  optimizer: "adamw"
+  scheduler: "cosine"
+  warmup_epochs: 5
+  grad_clip: 1.0
+  amp: true
+  num_workers: 2
+  seed: 42
+
+loss:
+  name: "combined"                        # ce | dice | focal | combined
+  ce_weight: 0.5
+  dice_weight: 0.5
+  ignore_index: 255
+
+logging:
+  log_dir: "logs"
+  experiment_name: "galileo_late_fusion"
+  log_interval: 10
+  val_interval: 1
+  save_top_k: 3
+  use_wandb: false
