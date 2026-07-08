@@ -25,10 +25,12 @@ class ImageNetEncoder(nn.Module):
         depth: int = 5,
         output_stride: int = 16,
         output_scales: int = 4,
+        freeze: bool = False,
     ):
         super().__init__()
         self.name = name
         self.output_scales = output_scales
+        self.freeze = freeze
 
         if weights is not None:
             self.encoder = smp.encoders.get_encoder(
@@ -45,6 +47,17 @@ class ImageNetEncoder(nn.Module):
 
         self._depth = depth
         self._out_channels = self.encoder.out_channels[-self.output_scales:]
+
+        if freeze:
+            self.encoder.eval()
+            for p in self.encoder.parameters():
+                p.requires_grad = False
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.freeze:
+            self.encoder.eval()
+        return self
 
     def _adapt_first_conv(self, in_channels: int):
         for attr in ['conv1', 'patch_embed', 'stem', 'conv_stem']:

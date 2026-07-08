@@ -9,7 +9,7 @@ model:
     mode: "per_frame"
     in_channels: 10
     img_size: 128
-    freeze: false
+    freeze: true
     output_scales: 4
   fusion_strategy: "bottleneck"
   decoder_channels: 256

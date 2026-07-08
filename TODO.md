@@ -11,6 +11,8 @@
 - [ ] P0 使用已转换好的 Hugging Face 格式 Galileo 权重：
   [GALILEO-transformers](https://huggingface.co/BiliSakura/GALILEO-transformers)。
 - [ ] P0 确认 `models/encoders/galileo_encoder.py` 的真实模型路径全程基于 `huggingface/transformers`，不要混用原始仓库中的非 HF 推理入口。
+- [ ] P0 SSL encoder 提取特征时禁止输入图像缩放；保持 PASTIS 原始 `128x128` 输入，不因为 SSL 模型预训练尺寸而 resize。
+- [ ] P0 在 encoder forward 或数据流检查中加入 shape 断言，确保进入 SSL 模型 wrapper 前仍为原始空间尺寸。
 - [ ] P0 固定并记录关键依赖版本：`torch`、`torchvision`、`transformers`、`huggingface-hub`、`accelerate`、`segmentation-models-pytorch`。
 - [ ] P0 增加环境验证脚本，例如 `scripts/check_env.py`，检查 CUDA、PASTIS、Galileo 权重、输出形状。
 - [ ] P1 给 README 增加一次真实环境的版本快照，避免复现实验时依赖漂移。
@@ -49,7 +51,7 @@
 
 ## 三、自监督学习效率提升：冻结 Encoder 特征预存
 
-在冻结 Galileo encoder、仅训练 decoder/head 的任务中，encoder 输出不会随训练变化。为避免每个 epoch 重复推理，应加入特征缓存流程。
+在冻结 Galileo 或 ImageNet encoder、仅训练 temporal fusion 与 decoder/head 的任务中，encoder 输出不会随训练变化。为避免每个 epoch 重复推理，应加入特征缓存流程。
 
 - [ ] P0 新增 `scripts/cache_features.py`，对 train/val/test folds 逐样本执行 Galileo encoder 推理。
 - [ ] P0 将每个样本的多尺度特征保存为 `.npz` 文件。
@@ -68,6 +70,7 @@
 - [ ] P1 支持缓存完整性检查：样本数、fold、feature shape、Galileo 权重版本。
 - [ ] P1 支持缓存路径配置，例如 `data/cache/galileo-base-patch8/`。
 - [ ] P1 比较原始训练与缓存训练的吞吐量、显存占用和最终 mIoU。
+- [ ] P1 同时支持 Galileo 缓存和 ImageNet baseline 缓存，便于公平比较。
 - [ ] P2 支持压缩选项：`float32`、`float16`、按尺度分文件、mmap 读取。
 
 验收标准：
@@ -78,10 +81,12 @@
 
 ## 四、当前主实验补全
 
-- [ ] P0 完整跑通 ImageNet baseline：`configs/exp_imagenet_baseline.yaml`。
-- [ ] P0 完整跑通 Galileo linear probe：`configs/exp_linear_probe.yaml`。
-- [ ] P0 完整跑通 Galileo late fusion：`configs/exp_late.yaml`。
-- [ ] P1 跑通 bottleneck fusion 和 decision fusion 对比。
+- [ ] P0 短学期统一数据划分：`fold3` 训练，`fold4` 验证，`fold5` 测试，确保两组方法可直接比较。
+- [ ] P0 标准参考划分保留为备选：`fold1,2,3` 训练，`fold4` 验证，`fold5` 测试。
+- [ ] P0 在统一 fold3 协议下完整跑通 ImageNet baseline：`configs/exp_imagenet_baseline.yaml`。
+- [ ] P0 在统一 fold3 协议下完整跑通 Galileo linear probe：`configs/exp_linear_probe.yaml`。
+- [ ] P0 在统一 fold3 协议下完整跑通 Galileo late fusion：`configs/exp_late.yaml`。
+- [ ] P1 在统一 fold3 协议下跑通 bottleneck fusion 和 decision fusion 对比。
 - [ ] P1 为每个实验保存 `best_model.pth`、最终验证集指标、测试集指标和 TensorBoard 曲线截图。
 - [ ] P1 整理实验表格：OA、mIoU、per-class IoU、训练时间、显存占用。
 
@@ -89,6 +94,9 @@
 
 - [ ] P0 检查 Galileo + AMP 的数值稳定性；若仍出现 `nan`，默认关闭 AMP 或使用 `bf16/fp32`。
 - [ ] P0 加入 loss 数值守卫：发现 `nan/inf` 时打印 batch id、patch id、target unique values。
+- [ ] P0 训练停止原则：时间允许时训练到收敛；train loss 基本不再下降时可停止。
+- [ ] P0 若同时有 val/test split，只能根据 val loss 判断收敛和 early stopping，test set 只做最终一次评估。
+- [ ] P0 若某个数据集只有 test set，不允许用 test loss 判断收敛或调参，避免测试集泄漏。
 - [ ] P1 增加 deterministic smoke test，固定 seed 后验证一次前向和一次反传。
 - [ ] P1 给 `scripts/eval.py` 增加缺失 checkpoint、类别数不匹配、config 不匹配的友好报错。
 - [ ] P1 检查 class imbalance，并考虑 class weight、Dice/Focal 权重调整。

@@ -5,7 +5,7 @@
 data:
   name: "PASTIS"
   root: "data/PASTIS"
-  folds: [1, 2, 3]
+  folds: [3]                              # short-course protocol: train one aligned fold
   val_folds: [4]
   test_folds: [5]
   target: "semantic"
@@ -23,7 +23,7 @@ model:
     mode: "per_frame"                     # per_frame | joint
     in_channels: 10
     img_size: 128
-    freeze: true                         # true for linear probing
+    freeze: true                         # freeze pretrained encoder; train fusion/decoder/head
     output_scales: 4
 
   # ── Fusion Strategy ──

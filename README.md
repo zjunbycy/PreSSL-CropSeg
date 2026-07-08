@@ -85,13 +85,15 @@ PreSSL-CropSeg/
 
 所有实验配置位于 `configs/`。实验 yaml 只写变化部分，运行时会自动与 `configs/default.yaml` 合并。
 
+当前短学期统一协议为：只使用 `fold3` 训练，`fold4` 验证，`fold5` 测试，便于和另一组方法在同一数据划分上对齐比较。标准 PASTIS 参考协议为 `fold1,2,3` 训练，`fold4` 验证，`fold5` 测试；时间允许时可再补完整协议。
+
 | 配置文件 | 编码器 | 融合策略 | 编码器状态 | 用途 |
 |---|---|---|---|---|
-| `configs/exp_imagenet_baseline.yaml` | ImageNet ResNet50 | Late | 微调 | 首先运行，验证完整流程 |
+| `configs/exp_imagenet_baseline.yaml` | ImageNet ResNet50 | Late | 冻结 | ImageNet 冻结特征基线 |
 | `configs/exp_linear_probe.yaml` | Galileo | Late | 冻结 | 测试 Galileo 特征质量 |
 | `configs/exp_late.yaml` | Galileo | Late | 冻结 | 当前默认主方案 |
-| `configs/exp_bottleneck.yaml` | Galileo | Bottleneck | 微调 | 中期融合对比 |
-| `configs/exp_decision.yaml` | Galileo | Decision | 微调 | 决策融合消融 |
+| `configs/exp_bottleneck.yaml` | Galileo | Bottleneck | 冻结 | 早期/瓶颈融合对比 |
+| `configs/exp_decision.yaml` | Galileo | Decision | 冻结 | 决策融合消融 |
 
 ## 快速试跑
 
@@ -133,6 +135,8 @@ python scripts/train.py --config configs/exp_late.yaml --batch-size 1 --no-amp
 python scripts/train.py --config configs/exp_bottleneck.yaml --batch-size 1
 python scripts/train.py --config configs/exp_decision.yaml --batch-size 1
 ```
+
+当前实验设计固定预训练 encoder，只训练后续 temporal fusion、DPT decoder 和 segmentation head。ImageNet baseline 也是冻结 encoder 的特征基线，用来和冻结 Galileo 特征进行公平比较。
 
 常用覆盖参数：
 
@@ -222,9 +226,11 @@ logs/                    training outputs
 ## 注意事项
 
 - 本地 PASTIS 标签为 `0..19`，不要把 `num_classes` 改回 19。
+- SSL encoder 提取特征时不要对输入影像做缩放；保持 PASTIS 原始 `128x128` 输入，不需要迁就 SSL 模型预训练时的图像大小。
 - Galileo 的真实权重依赖 `transformers`、`huggingface-hub` 和 `trust_remote_code=True`。
 - Galileo + AMP 可能出现数值不稳定；线性探测和默认 late 方案建议先用 `--no-amp` 验证。
-- 冻结 Galileo encoder 时，wrapper 会保持 encoder 为 eval 模式，只训练 decoder/head。
+- 冻结 encoder 时，wrapper 会保持 encoder 为 eval 模式，只训练 temporal fusion、decoder/head。
+- 收敛判断只看 train loss 和 val loss；test set 只用于最终报告，不用于 early stopping 或调参。
 - 当前训练器是轻量 PyTorch loop。后续计划迁移到 Hugging Face `accelerate`/`Trainer`，见 `TODO.md`。
 
 ## 参考

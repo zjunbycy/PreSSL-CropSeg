@@ -27,10 +27,11 @@ class BottleneckFusion(nn.Module):
         self,
         in_channels: list,
         use_date_encoding: bool = True,
-        date_encoding_dim: int = 64,
+        date_encoding_dim: int = 6,
     ):
         super().__init__()
         self.use_date_encoding = use_date_encoding
+        self.n_scales = len(in_channels)
 
         # Per-scale 1x1 Conv to produce scalar attention weights
         self.attention_convs = nn.ModuleList([
@@ -41,7 +42,7 @@ class BottleneckFusion(nn.Module):
             self.date_fc = nn.Sequential(
                 nn.Linear(date_encoding_dim, date_encoding_dim),
                 nn.ReLU(),
-                nn.Linear(date_encoding_dim, sum(in_channels)),
+                nn.Linear(date_encoding_dim, self.n_scales),
             )
 
     def _get_date_encoding(self, dates: torch.Tensor, device: torch.device) -> torch.Tensor:
@@ -86,15 +87,12 @@ class BottleneckFusion(nn.Module):
             # Inject date bias
             if self.use_date_encoding and dates is not None:
                 date_enc = self._get_date_encoding(dates, feat.device)
-                bias = self.date_fc(date_enc)  # (B, T, sum(all_C))
-                # Take a slice for this scale
-                offset = sum(self.attention_convs[j].out_channels
-                             for j in range(i))
-                bias_i = bias[:, :, offset:offset + 1]  # (B, T, 1) — simplified
+                bias = self.date_fc(date_enc)  # (B, T, n_scales)
+                bias_i = bias[:, :, i:i + 1]  # (B, T, 1)
                 attn = attn + bias_i.unsqueeze(-1).unsqueeze(-1)
 
             # Softmax over T
-            attn = attn.flatten(3).mean(-1, keepdim=True)  # (B, T, 1, 1, 1)
+            attn = attn.flatten(3).mean(-1, keepdim=True).unsqueeze(-1)  # (B, T, 1, 1, 1)
             attn = torch.softmax(attn / (C ** 0.5), dim=1)
 
             # Weighted sum → collapse T
